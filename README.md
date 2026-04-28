@@ -15,6 +15,16 @@ Interactive static showcase comparing the same scene prompts generated with Clau
 | Golden Gate | `scenes/golden-gate-400k/` | `scenes/golden-gate-1m/` |
 | Stonehenge | `scenes/stonehenge-400k/` | `scenes/stonehenge-1m/` |
 
+## Prompts
+
+The source prompts are included in [`prompts/`](prompts/):
+
+| Scene | Prompt |
+| --- | --- |
+| Voxel Rome | [`prompts/voxel-rome.md`](prompts/voxel-rome.md) |
+| Golden Gate | [`prompts/golden-gate.md`](prompts/golden-gate.md) |
+| Stonehenge | [`prompts/stonehenge.md`](prompts/stonehenge.md) |
+
 ## Source Mapping
 
 The public scene folders were copied from:

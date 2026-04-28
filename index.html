@@ -36,10 +36,26 @@
       ></iframe>
 
       <div class="viewer-actions" aria-label="Scene actions">
+        <button id="viewPrompt" type="button">Prompt</button>
         <a id="openScene" href="scenes/voxel-rome-400k/index.html" target="_blank" rel="noreferrer">Open Scene</a>
-        <a id="viewSource" href="scenes/voxel-rome-400k/index.html" target="_blank" rel="noreferrer">Source</a>
+        <a id="viewSource" href="https://github.com/petergpt/claude-opus-47-context-worlds/tree/main/scenes/voxel-rome-400k" target="_blank" rel="noreferrer">Source</a>
       </div>
     </section>
+
+    <div id="promptBackdrop" class="prompt-backdrop" hidden></div>
+    <aside id="promptPanel" class="prompt-panel" aria-hidden="true" aria-label="Source prompt">
+      <div class="prompt-panel-header">
+        <div>
+          <p>Source Prompt</p>
+          <h2 id="promptTitle">Voxel Rome</h2>
+        </div>
+        <div class="prompt-panel-actions">
+          <button id="copyPrompt" type="button">Copy Prompt</button>
+          <button id="closePrompt" type="button">Close</button>
+        </div>
+      </div>
+      <article id="promptContent" class="prompt-content">Loading prompt...</article>
+    </aside>
 
     <footer class="scene-strip" aria-label="All scene shortcuts">
       <button type="button" class="scene-jump is-active" data-scene="rome" data-context="400k">
