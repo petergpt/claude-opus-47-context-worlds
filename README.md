@@ -1,6 +1,8 @@
-# Claude Opus 4.7 Context Worlds
+# Claude Opus 4.7: 400k vs 1m Model Variant Comparison
 
-Interactive static showcase comparing the same scene prompts generated with Claude Opus 4.7 at two context windows:
+Hosted viewer: https://petergpt.github.io/claude-opus-47-context-worlds/
+
+Interactive static showcase comparing the same scene prompts generated with Claude Opus 4.7 model variants at two context windows:
 
 - `400k Context`
 - `1m Context`
