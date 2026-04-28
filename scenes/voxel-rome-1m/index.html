@@ -1,0 +1,1467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Voxel Rome — Ancient City Centre</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden;
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color: #f5e6c8; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  #hud {
+    position: fixed; top: 14px; left: 14px;
+    padding: 12px 16px; border-radius: 10px;
+    background: rgba(20, 14, 8, 0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    font-size: 12px; line-height: 1.55; pointer-events: none;
+    border: 1px solid rgba(255, 220, 170, 0.18);
+    max-width: 280px;
+  }
+  #hud h1 { margin: 0 0 6px; font-size: 14px; letter-spacing: 1px;
+    color: #ffd58a; text-transform: uppercase; }
+  #hud .key { display: inline-block; padding: 1px 5px; margin-right: 4px;
+    background: rgba(255,210,150,0.15); border-radius: 3px;
+    border: 1px solid rgba(255,210,150,0.3); font-family: Menlo, monospace;
+    font-size: 11px; color: #ffe4b8; }
+  #stats { position: fixed; bottom: 12px; right: 12px;
+    padding: 6px 10px; border-radius: 6px;
+    background: rgba(20, 14, 8, 0.5);
+    font-family: Menlo, monospace; font-size: 11px;
+    border: 1px solid rgba(255, 220, 170, 0.15);
+    pointer-events: none; }
+  #loading { position: fixed; inset: 0; display: flex;
+    align-items: center; justify-content: center;
+    background: radial-gradient(circle at 50% 40%, #2a1a0d, #000);
+    color: #ffd58a; font-size: 22px; letter-spacing: 2px;
+    z-index: 10; transition: opacity 0.6s ease; }
+  #loading.hidden { opacity: 0; pointer-events: none; }
+  #loading .spinner { display: inline-block; margin-right: 14px; width: 22px; height: 22px;
+    border: 3px solid rgba(255, 213, 138, 0.25);
+    border-top-color: #ffd58a; border-radius: 50%;
+    animation: spin 1s linear infinite; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="hud">
+  <h1>Voxel Rome</h1>
+  <div><span class="key">L-drag</span>orbit camera</div>
+  <div><span class="key">R-drag</span>pan view</div>
+  <div><span class="key">Wheel</span>zoom</div>
+  <div style="margin-top:6px;">
+    <span class="key">R</span>recenter on Colosseum<br>
+    <span class="key">F</span>flyover mode<br>
+    <span class="key">T</span>toggle time of day
+  </div>
+</div>
+<div id="stats">init…</div>
+<div id="loading"><span class="spinner"></span>Building Rome…</div>
+
+<script>
+'use strict';
+(function() {
+
+// ======================================================================
+//  MATH UTILITIES
+// ======================================================================
+const PI = Math.PI, TAU = PI * 2;
+const v3sub = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const v3add = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+const v3scale = (a, s) => [a[0]*s, a[1]*s, a[2]*s];
+const v3len = a => Math.hypot(a[0], a[1], a[2]);
+const v3norm = a => { const l = v3len(a); return l > 1e-8 ? [a[0]/l, a[1]/l, a[2]/l] : [0,0,0]; };
+const v3cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const v3dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const lerp = (a, b, t) => a + (b - a) * t;
+const lerpV = (a, b, t) => [lerp(a[0],b[0],t), lerp(a[1],b[1],t), lerp(a[2],b[2],t)];
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+
+function mat4Perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2);
+  const m = new Float32Array(16);
+  m[0] = f / aspect; m[5] = f;
+  m[10] = (far + near) / (near - far);
+  m[11] = -1;
+  m[14] = (2 * far * near) / (near - far);
+  return m;
+}
+
+function mat4LookAt(eye, target, up) {
+  const f = v3norm(v3sub(target, eye));
+  const s = v3norm(v3cross(f, up));
+  const u = v3cross(s, f);
+  const m = new Float32Array(16);
+  m[0] = s[0]; m[4] = s[1]; m[8]  = s[2];  m[12] = -v3dot(s, eye);
+  m[1] = u[0]; m[5] = u[1]; m[9]  = u[2];  m[13] = -v3dot(u, eye);
+  m[2] =-f[0]; m[6] =-f[1]; m[10] =-f[2];  m[14] =  v3dot(f, eye);
+  m[15] = 1;
+  return m;
+}
+
+// Deterministic PRNG (Mulberry32) for reproducible cities
+function rngFromSeed(seed) {
+  let s = seed | 0;
+  return function() {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const RNG = rngFromSeed(20260427);
+const rand = () => RNG();
+const randR = (a, b) => a + (b - a) * RNG();
+const randI = (a, b) => Math.floor(randR(a, b + 1));
+const choice = arr => arr[Math.floor(RNG() * arr.length)];
+
+// ======================================================================
+//  COLOR PALETTE — historical Roman tones
+// ======================================================================
+const C = {
+  // ground
+  GRASS_L:    [0.46, 0.55, 0.28],
+  GRASS_D:    [0.34, 0.45, 0.22],
+  GRASS_DRY:  [0.62, 0.60, 0.32],
+  DIRT:       [0.52, 0.39, 0.24],
+  SAND:       [0.78, 0.66, 0.42],
+  COBBLE_L:   [0.55, 0.52, 0.48],
+  COBBLE_D:   [0.42, 0.40, 0.37],
+  ROAD_STONE: [0.60, 0.57, 0.51],
+  WATER:      [0.20, 0.42, 0.58],
+  WATER_D:    [0.14, 0.30, 0.45],
+  RIVERBED:   [0.30, 0.28, 0.22],
+  // building stone
+  TRAVERTINE: [0.92, 0.86, 0.70],
+  TRAVERTINE_D:[0.78, 0.72, 0.58],
+  MARBLE:     [0.95, 0.93, 0.88],
+  MARBLE_D:   [0.82, 0.80, 0.76],
+  PORPHYRY:   [0.46, 0.18, 0.22],
+  RED_BRICK:  [0.62, 0.32, 0.22],
+  RED_BRICK_D:[0.50, 0.26, 0.18],
+  TERRACOTTA: [0.78, 0.40, 0.22],
+  TERRACOTTA_D:[0.62, 0.32, 0.18],
+  GOLD:       [0.92, 0.74, 0.28],
+  GOLD_D:     [0.76, 0.58, 0.20],
+  DARK_STONE: [0.30, 0.27, 0.24],
+  // crowd / gladiators
+  CROWD_A:    [0.85, 0.60, 0.45],
+  CROWD_B:    [0.60, 0.30, 0.30],
+  CROWD_C:    [0.90, 0.85, 0.75],
+  CROWD_D:    [0.40, 0.35, 0.30],
+  GLAD_RED:   [0.78, 0.18, 0.18],
+  GLAD_BLUE:  [0.22, 0.30, 0.62],
+  SKIN:       [0.90, 0.72, 0.55],
+  // vegetation
+  CYPRESS:    [0.18, 0.32, 0.18],
+  PINE_DARK:  [0.22, 0.36, 0.22],
+  PINE_LITE:  [0.32, 0.48, 0.28],
+  TRUNK:      [0.32, 0.22, 0.14],
+  OLIVE:      [0.55, 0.62, 0.38],
+};
+
+const jitterColor = (c, amt = 0.04) => [
+  clamp(c[0] + (RNG() - 0.5) * amt, 0, 1),
+  clamp(c[1] + (RNG() - 0.5) * amt, 0, 1),
+  clamp(c[2] + (RNG() - 0.5) * amt, 0, 1),
+];
+
+// ======================================================================
+//  WEBGL2 SETUP
+// ======================================================================
+const canvas = document.getElementById('canvas');
+const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' });
+if (!gl) {
+  document.getElementById('loading').textContent = 'WebGL2 not supported in this browser.';
+  throw new Error('WebGL2 unavailable');
+}
+
+let dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  canvas.width  = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
+  canvas.style.width  = w + 'px';
+  canvas.style.height = h + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ----------- shader compile helpers -----------
+function compileShader(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const info = gl.getShaderInfoLog(sh);
+    console.error(src);
+    throw new Error('Shader compile error: ' + info);
+  }
+  return sh;
+}
+function makeProgram(vsSrc, fsSrc) {
+  const vs = compileShader(gl.VERTEX_SHADER, vsSrc);
+  const fs = compileShader(gl.FRAGMENT_SHADER, fsSrc);
+  const p = gl.createProgram();
+  gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    throw new Error('Link error: ' + gl.getProgramInfoLog(p));
+  return p;
+}
+
+// ----------- Voxel shaders -----------
+const VOX_VS = `#version 300 es
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec3 a_normal;
+layout(location=2) in vec4 i_offsetScale;   // xyz=offset, w=scale
+layout(location=3) in vec4 i_colorShade;    // rgb=color, a=shade multiplier (AO/variation)
+uniform mat4 u_view;
+uniform mat4 u_proj;
+out vec3 v_normal;
+out vec3 v_world;
+out vec3 v_color;
+out float v_shade;
+void main() {
+  vec3 world = a_pos * i_offsetScale.w + i_offsetScale.xyz;
+  v_world = world;
+  v_normal = a_normal;
+  v_color = i_colorShade.rgb;
+  v_shade = i_colorShade.a;
+  gl_Position = u_proj * u_view * vec4(world, 1.0);
+}`;
+
+const VOX_FS = `#version 300 es
+precision highp float;
+in vec3 v_normal;
+in vec3 v_world;
+in vec3 v_color;
+in float v_shade;
+uniform vec3 u_lightDir;     // direction TO light (already normalized)
+uniform vec3 u_lightColor;
+uniform vec3 u_ambient;
+uniform vec3 u_camPos;
+uniform vec3 u_fogColor;
+uniform float u_fogNear;
+uniform float u_fogFar;
+out vec4 outColor;
+void main() {
+  vec3 N = normalize(v_normal);
+  float NdotL = max(dot(N, u_lightDir), 0.0);
+  // Sky/ground hemisphere term — top-facing surfaces brighter
+  float hemi = 0.5 + 0.5 * N.y;
+  vec3 diff = v_color * (u_lightColor * NdotL + u_ambient * hemi);
+  diff *= v_shade;
+  // distance fog blends to atmosphere color
+  float dist = length(v_world - u_camPos);
+  float fog = clamp((dist - u_fogNear) / (u_fogFar - u_fogNear), 0.0, 1.0);
+  fog = fog * fog * (3.0 - 2.0 * fog) * 0.85;
+  vec3 col = mix(diff, u_fogColor, fog);
+  outColor = vec4(col, 1.0);
+}`;
+
+// ----------- Sky shaders (full-screen gradient) -----------
+const SKY_VS = `#version 300 es
+layout(location=0) in vec2 a_pos;
+out vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.999999, 1.0);
+}`;
+const SKY_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform vec3 u_top;
+uniform vec3 u_bot;
+uniform vec3 u_horizon;
+out vec4 outColor;
+void main() {
+  float y = v_uv.y;
+  vec3 col;
+  if (y < 0.55) col = mix(u_horizon, u_bot, smoothstep(0.0, 0.55, y));
+  else col = mix(u_horizon, u_top, smoothstep(0.55, 1.0, y));
+  outColor = vec4(col, 1.0);
+}`;
+
+const voxProg = makeProgram(VOX_VS, VOX_FS);
+const skyProg = makeProgram(SKY_VS, SKY_FS);
+
+const uVox = {
+  view: gl.getUniformLocation(voxProg, 'u_view'),
+  proj: gl.getUniformLocation(voxProg, 'u_proj'),
+  lightDir: gl.getUniformLocation(voxProg, 'u_lightDir'),
+  lightColor: gl.getUniformLocation(voxProg, 'u_lightColor'),
+  ambient: gl.getUniformLocation(voxProg, 'u_ambient'),
+  camPos: gl.getUniformLocation(voxProg, 'u_camPos'),
+  fogColor: gl.getUniformLocation(voxProg, 'u_fogColor'),
+  fogNear: gl.getUniformLocation(voxProg, 'u_fogNear'),
+  fogFar: gl.getUniformLocation(voxProg, 'u_fogFar'),
+};
+const uSky = {
+  top: gl.getUniformLocation(skyProg, 'u_top'),
+  bot: gl.getUniformLocation(skyProg, 'u_bot'),
+  horizon: gl.getUniformLocation(skyProg, 'u_horizon'),
+};
+
+// ----------- Cube geometry (36 vertices, pos+normal) -----------
+const CUBE_DATA = new Float32Array([
+  // +X
+   0.5,-0.5,-0.5, 1,0,0,  0.5, 0.5,-0.5, 1,0,0,  0.5, 0.5, 0.5, 1,0,0,
+   0.5,-0.5,-0.5, 1,0,0,  0.5, 0.5, 0.5, 1,0,0,  0.5,-0.5, 0.5, 1,0,0,
+  // -X
+  -0.5,-0.5, 0.5,-1,0,0, -0.5, 0.5, 0.5,-1,0,0, -0.5, 0.5,-0.5,-1,0,0,
+  -0.5,-0.5, 0.5,-1,0,0, -0.5, 0.5,-0.5,-1,0,0, -0.5,-0.5,-0.5,-1,0,0,
+  // +Y
+  -0.5, 0.5, 0.5, 0,1,0,  0.5, 0.5, 0.5, 0,1,0,  0.5, 0.5,-0.5, 0,1,0,
+  -0.5, 0.5, 0.5, 0,1,0,  0.5, 0.5,-0.5, 0,1,0, -0.5, 0.5,-0.5, 0,1,0,
+  // -Y
+  -0.5,-0.5,-0.5, 0,-1,0, 0.5,-0.5,-0.5, 0,-1,0, 0.5,-0.5, 0.5, 0,-1,0,
+  -0.5,-0.5,-0.5, 0,-1,0, 0.5,-0.5, 0.5, 0,-1,0,-0.5,-0.5, 0.5, 0,-1,0,
+  // +Z
+  -0.5,-0.5, 0.5, 0,0,1,  0.5,-0.5, 0.5, 0,0,1,  0.5, 0.5, 0.5, 0,0,1,
+  -0.5,-0.5, 0.5, 0,0,1,  0.5, 0.5, 0.5, 0,0,1, -0.5, 0.5, 0.5, 0,0,1,
+  // -Z
+   0.5,-0.5,-0.5, 0,0,-1,-0.5,-0.5,-0.5, 0,0,-1,-0.5, 0.5,-0.5, 0,0,-1,
+   0.5,-0.5,-0.5, 0,0,-1,-0.5, 0.5,-0.5, 0,0,-1, 0.5, 0.5,-0.5, 0,0,-1,
+]);
+const CUBE_VERT_COUNT = 36;
+
+const cubeVbo = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, cubeVbo);
+gl.bufferData(gl.ARRAY_BUFFER, CUBE_DATA, gl.STATIC_DRAW);
+
+// ----------- Sky quad VBO -----------
+const skyVao = gl.createVertexArray();
+const skyVbo = gl.createBuffer();
+gl.bindVertexArray(skyVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, skyVbo);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+gl.bindVertexArray(null);
+
+// ======================================================================
+//  VOXEL COLLECTOR — gathers all instance data, then uploads as one VBO
+// ======================================================================
+// Per-instance: 8 floats — [ox, oy, oz, scale, r, g, b, shade]
+const VOX_STRIDE = 8;
+let voxData = new Float32Array(1 << 18); // grow as needed
+let voxCount = 0;
+
+function ensureCapacity(extra) {
+  while ((voxCount + extra) * VOX_STRIDE > voxData.length) {
+    const bigger = new Float32Array(voxData.length * 2);
+    bigger.set(voxData);
+    voxData = bigger;
+  }
+}
+
+function addVox(x, y, z, scale, color, shade) {
+  ensureCapacity(1);
+  const i = voxCount * VOX_STRIDE;
+  voxData[i  ] = x;     voxData[i+1] = y;     voxData[i+2] = z;
+  voxData[i+3] = scale;
+  voxData[i+4] = color[0]; voxData[i+5] = color[1]; voxData[i+6] = color[2];
+  voxData[i+7] = shade;
+  voxCount++;
+}
+
+// ======================================================================
+//  WORLD GENERATION — terrain, river, hills
+// ======================================================================
+const WS = 200; // world half-size in world units
+const VOX = 1.0; // base voxel size
+
+// Hill definitions — Seven Hills of Rome (positioned to ring the Forum)
+const HILLS = [
+  { name: 'Palatine',   x:   0,  z:  -45, h: 18, r: 60 },
+  { name: 'Capitoline', x: -55,  z:  -10, h: 22, r: 45 },
+  { name: 'Aventine',   x: -30,  z:  100, h: 20, r: 65 },
+  { name: 'Caelian',    x:  90,  z:   30, h: 17, r: 55 },
+  { name: 'Esquiline',  x:  60,  z:  -90, h: 19, r: 70 },
+  { name: 'Viminal',    x:  10,  z: -130, h: 16, r: 50 },
+  { name: 'Quirinal',   x: -80,  z: -100, h: 20, r: 55 },
+];
+
+// Tiber — flows along negative-X edge with sinuous curve
+const TIBER_BASE_X = -150;
+const TIBER_AMP = 18;
+const TIBER_FREQ = 0.012;
+const TIBER_HALF_WIDTH = 14;
+const WATER_LEVEL = -2;
+
+function tiberCenterAt(z) { return TIBER_BASE_X + TIBER_AMP * Math.sin(z * TIBER_FREQ); }
+function isInTiber(x, z) {
+  return Math.abs(x - tiberCenterAt(z)) < TIBER_HALF_WIDTH;
+}
+function tiberDist(x, z) { return Math.abs(x - tiberCenterAt(z)); }
+
+// pseudo value-noise
+function vnoise(x, z) {
+  const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453;
+  return (s - Math.floor(s));
+}
+function smoothNoise(x, z) {
+  const x0 = Math.floor(x), z0 = Math.floor(z);
+  const xf = x - x0, zf = z - z0;
+  const u = xf*xf*(3-2*xf), v = zf*zf*(3-2*zf);
+  const a = vnoise(x0,   z0);
+  const b = vnoise(x0+1, z0);
+  const c = vnoise(x0,   z0+1);
+  const d = vnoise(x0+1, z0+1);
+  return lerp(lerp(a,b,u), lerp(c,d,u), v);
+}
+
+function heightAt(x, z) {
+  // Tiber valley overrides
+  const td = tiberDist(x, z);
+  if (td < TIBER_HALF_WIDTH + 4) {
+    const k = clamp(td / (TIBER_HALF_WIDTH + 4), 0, 1);
+    return Math.floor(WATER_LEVEL + 4 * k * k);
+  }
+  let h = 0;
+  for (const hill of HILLS) {
+    const dx = x - hill.x, dz = z - hill.z;
+    const d = Math.sqrt(dx*dx + dz*dz);
+    if (d < hill.r) {
+      const f = 1 - d / hill.r;
+      h += hill.h * f * f;
+    }
+  }
+  // small noise everywhere
+  h += (smoothNoise(x * 0.08, z * 0.08) - 0.5) * 2.5;
+  // dampen near city core (around Colosseum) so the centre is mostly flat
+  const coreDist = Math.hypot(x, z);
+  if (coreDist < 80) {
+    const flatten = 1 - (coreDist / 80);
+    h *= (1 - flatten * 0.85);
+  }
+  return Math.round(h);
+}
+
+function groundColorAt(x, z, y) {
+  const onHill = y > 4;
+  if (isRoad(x, z)) return jitterColor(C.ROAD_STONE, 0.08);
+  if (onHill) {
+    const v = smoothNoise(x*0.2, z*0.2);
+    return jitterColor(v < 0.4 ? C.GRASS_D : v < 0.75 ? C.GRASS_L : C.GRASS_DRY, 0.06);
+  }
+  // around city core
+  const r = Math.hypot(x, z);
+  if (r < 90) return jitterColor(rand() < 0.5 ? C.COBBLE_L : C.COBBLE_D, 0.07);
+  // outer plain
+  const v = smoothNoise(x*0.18, z*0.18);
+  return jitterColor(v < 0.5 ? C.GRASS_L : C.GRASS_DRY, 0.06);
+}
+
+// ======================================================================
+//  CITY-PLAN GRID — bounding box allocator
+// ======================================================================
+const PLAN_RES = 1;
+const PLAN_W = WS * 2;
+const planGrid = new Uint8Array(PLAN_W * PLAN_W);
+function pIdx(x, z) {
+  const ix = Math.floor(x) + WS, iz = Math.floor(z) + WS;
+  if (ix < 0 || iz < 0 || ix >= PLAN_W || iz >= PLAN_W) return -1;
+  return ix * PLAN_W + iz;
+}
+function pGet(x, z) { const i = pIdx(x, z); return i < 0 ? 1 : planGrid[i]; }
+function pSet(x, z, v) { const i = pIdx(x, z); if (i >= 0) planGrid[i] = v; }
+function pBlockClear(cx, cz, w, d, pad = 0) {
+  const x0 = Math.floor(cx - w/2 - pad), x1 = Math.ceil(cx + w/2 + pad);
+  const z0 = Math.floor(cz - d/2 - pad), z1 = Math.ceil(cz + d/2 + pad);
+  for (let x = x0; x < x1; x++)
+    for (let z = z0; z < z1; z++)
+      if (pGet(x, z)) return false;
+  return true;
+}
+function pBlockMark(cx, cz, w, d, val = 1) {
+  const x0 = Math.floor(cx - w/2), x1 = Math.ceil(cx + w/2);
+  const z0 = Math.floor(cz - d/2), z1 = Math.ceil(cz + d/2);
+  for (let x = x0; x < x1; x++)
+    for (let z = z0; z < z1; z++)
+      pSet(x, z, val);
+}
+
+// ======================================================================
+//  ROAD NETWORK — Cardo (N-S) / Decumanus (E-W) plus radial avenues
+// ======================================================================
+const roads = [];
+function addRoadH(z, w, x0 = -WS, x1 = WS) { roads.push({ kind:'h', z, w, x0, x1 }); }
+function addRoadV(x, w, z0 = -WS, z1 = WS) { roads.push({ kind:'v', x, w, z0, z1 }); }
+function addRoadDiag(ax, az, bx, bz, w) { roads.push({ kind:'d', ax, az, bx, bz, w }); }
+
+function isRoad(x, z) {
+  for (const r of roads) {
+    if (r.kind === 'h') { if (x >= r.x0 && x <= r.x1 && Math.abs(z - r.z) <= r.w/2) return true; }
+    else if (r.kind === 'v') { if (z >= r.z0 && z <= r.z1 && Math.abs(x - r.x) <= r.w/2) return true; }
+    else { // diag
+      const dx = r.bx - r.ax, dz = r.bz - r.az;
+      const len2 = dx*dx + dz*dz;
+      if (len2 < 1) continue;
+      let t = ((x - r.ax) * dx + (z - r.az) * dz) / len2;
+      t = clamp(t, 0, 1);
+      const px = r.ax + t * dx, pz = r.az + t * dz;
+      const d2 = (x-px)*(x-px) + (z-pz)*(z-pz);
+      if (d2 <= (r.w/2)*(r.w/2)) return true;
+    }
+  }
+  return false;
+}
+
+function setupRoads() {
+  // Cardo Maximus (N-S through Forum, just west of Colosseum)
+  addRoadV(-15, 6);
+  // Decumanus (E-W south of Forum)
+  addRoadH(-30, 6);
+  // Via Sacra-style avenue from Colosseum north into Forum
+  addRoadV(0, 5, -120, -10);
+  // Outer ring roads
+  addRoadH(80, 4);
+  addRoadH(-100, 4);
+  addRoadV(80, 4, -150, 80);
+  // Diagonal road to Tiber
+  addRoadDiag(-15, -30, -120, 50, 4);
+  addRoadDiag(0, 0, 130, 90, 4);
+}
+setupRoads();
+
+// ======================================================================
+//  TERRAIN BUILD — surface voxels + Tiber water + riverbed
+// ======================================================================
+function buildTerrain() {
+  for (let x = -WS; x < WS; x++) {
+    for (let z = -WS; z < WS; z++) {
+      const h = heightAt(x, z);
+      const inTiber = isInTiber(x, z);
+
+      if (inTiber) {
+        // riverbed
+        for (let y = h; y < WATER_LEVEL; y++) {
+          if (y === h)
+            addVox(x + 0.5, y + 0.5, z + 0.5, VOX, jitterColor(C.RIVERBED, 0.06), 0.85);
+        }
+        // surface water — slightly varied for shimmer
+        const wcol = jitterColor(rand() < 0.7 ? C.WATER : C.WATER_D, 0.05);
+        addVox(x + 0.5, WATER_LEVEL + 0.5, z + 0.5, VOX, wcol, 0.95);
+        continue;
+      }
+
+      // top voxel — color by zone/height
+      const col = groundColorAt(x, z, h);
+      const shade = 0.92 + (smoothNoise(x*0.3, z*0.3) - 0.5) * 0.08;
+      addVox(x + 0.5, h + 0.5, z + 0.5, VOX, col, shade);
+
+      // fill underside if neighbors are lower (avoid see-through cliffs)
+      const minN = Math.min(
+        heightAt(x-1, z), heightAt(x+1, z),
+        heightAt(x, z-1), heightAt(x, z+1)
+      );
+      if (minN < h - 1) {
+        const dirt = jitterColor(C.DIRT, 0.05);
+        for (let y = minN; y < h; y++)
+          addVox(x + 0.5, y + 0.5, z + 0.5, VOX, dirt, 0.78);
+      }
+
+      // Tiber bank — slightly wet sand near river
+      if (tiberDist(x, z) < TIBER_HALF_WIDTH + 3 && !inTiber) {
+        addVox(x + 0.5, h + 0.5, z + 0.5, VOX, jitterColor(C.SAND, 0.06), 0.93);
+      }
+    }
+  }
+}
+
+// ======================================================================
+//  VEGETATION — cypresses, pines, olive shrubs
+// ======================================================================
+function placeCypress(x, z) {
+  const y0 = heightAt(x, z) + 1;
+  const h = randI(8, 13);
+  // trunk
+  for (let y = 0; y < 2; y++)
+    addVox(x + 0.5, y0 + y + 0.5, z + 0.5, VOX, jitterColor(C.TRUNK, 0.04), 0.85);
+  // dense narrow cone
+  for (let y = 1; y < h; y++) {
+    const t = y / h;
+    const r = (1 - t) * 1.4 + 0.4;
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        const d = Math.hypot(dx, dz);
+        if (d <= r) {
+          addVox(x + dx + 0.5, y0 + y + 0.5, z + dz + 0.5, VOX,
+            jitterColor(C.CYPRESS, 0.05), 0.9);
+        }
+      }
+    }
+  }
+  // tip
+  addVox(x + 0.5, y0 + h + 0.5, z + 0.5, VOX, jitterColor(C.CYPRESS, 0.04), 0.92);
+}
+
+function placeUmbrellaPine(x, z) {
+  const y0 = heightAt(x, z) + 1;
+  const trunkH = randI(7, 10);
+  for (let y = 0; y < trunkH; y++)
+    addVox(x + 0.5, y0 + y + 0.5, z + 0.5, VOX, jitterColor(C.TRUNK, 0.05), 0.85);
+  // canopy — flat-ish disc
+  const cy = y0 + trunkH;
+  for (let dx = -4; dx <= 4; dx++) {
+    for (let dz = -4; dz <= 4; dz++) {
+      const d = Math.hypot(dx, dz);
+      if (d <= 4) {
+        const layers = d < 2 ? 3 : d < 3.5 ? 2 : 1;
+        for (let l = 0; l < layers; l++) {
+          const col = (l === layers - 1) ? C.PINE_LITE : C.PINE_DARK;
+          addVox(x + dx + 0.5, cy + l + 0.5, z + dz + 0.5, VOX,
+            jitterColor(col, 0.05), 0.92);
+        }
+      }
+    }
+  }
+}
+
+function placeOliveShrub(x, z) {
+  const y0 = heightAt(x, z) + 1;
+  const r = 1 + Math.floor(rand() * 2);
+  for (let dx = -r; dx <= r; dx++) {
+    for (let dz = -r; dz <= r; dz++) {
+      for (let dy = 0; dy <= r + 1; dy++) {
+        if (Math.hypot(dx, dy - r/2, dz) <= r + 0.5) {
+          addVox(x + dx + 0.5, y0 + dy + 0.5, z + dz + 0.5, VOX,
+            jitterColor(C.OLIVE, 0.06), 0.9);
+        }
+      }
+    }
+  }
+}
+
+function buildVegetation() {
+  // hill-frame cypresses (formal lines)
+  for (const hill of HILLS) {
+    const count = 16;
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * TAU + rand() * 0.2;
+      const r = hill.r * 0.85;
+      const x = Math.round(hill.x + Math.cos(a) * r);
+      const z = Math.round(hill.z + Math.sin(a) * r);
+      if (Math.abs(x) > WS - 5 || Math.abs(z) > WS - 5) continue;
+      if (isInTiber(x, z) || isRoad(x, z) || pGet(x, z)) continue;
+      placeCypress(x, z);
+    }
+    // umbrella pines on top
+    for (let i = 0; i < 6; i++) {
+      const a = rand() * TAU;
+      const r = rand() * hill.r * 0.5;
+      const x = Math.round(hill.x + Math.cos(a) * r);
+      const z = Math.round(hill.z + Math.sin(a) * r);
+      if (isRoad(x, z) || pGet(x, z) || isInTiber(x, z)) continue;
+      placeUmbrellaPine(x, z);
+    }
+    // olive shrubs scattered
+    for (let i = 0; i < 30; i++) {
+      const a = rand() * TAU;
+      const r = rand() * hill.r;
+      const x = Math.round(hill.x + Math.cos(a) * r);
+      const z = Math.round(hill.z + Math.sin(a) * r);
+      if (isRoad(x, z) || pGet(x, z) || isInTiber(x, z)) continue;
+      if (rand() < 0.6) placeOliveShrub(x, z);
+    }
+  }
+  // pines along Tiber west bank
+  for (let z = -WS + 10; z < WS - 10; z += 6) {
+    const cx = tiberCenterAt(z);
+    const x = Math.round(cx - TIBER_HALF_WIDTH - 3 - rand() * 4);
+    if (Math.abs(x) > WS - 5) continue;
+    if (rand() < 0.7) placeUmbrellaPine(x, z + Math.floor(rand() * 3));
+  }
+}
+
+// ======================================================================
+//  COLOSSEUM — the centerpiece
+// ======================================================================
+function buildColosseum() {
+  // outer ellipse (Colosseum is about 189m × 156m IRL)
+  const A = 50, B = 42;            // outer wall ellipse
+  const Aw = A - 4, Bw = B - 4;    // inner edge of outer wall ring
+  const Ai = 26, Bi = 22;          // arena inner edge (cavea inner)
+  const VS = 0.5;                  // half-size voxels for fine detail
+  const groundY = 0;               // floor of central area
+  const wallTop = 22;
+  const arenaY  = 0.0;
+  const hypoBottom = -5;
+
+  function ellipseVal(x, z, a, b) { return (x*x)/(a*a) + (z*z)/(b*b); }
+
+  // Outer wall ring with arches & tiers
+  for (let x = -A - 1; x <= A + 1; x += VS) {
+    for (let z = -B - 1; z <= B + 1; z += VS) {
+      const e_out = ellipseVal(x, z, A, B);
+      const e_inWall = ellipseVal(x, z, Aw, Bw);
+      if (e_out > 1) continue;
+      if (e_inWall > 1) {
+        // we are in outer wall ring
+        const angle = Math.atan2(z, x);
+        for (let y = 0; y < wallTop; y += VS) {
+          // tier banding
+          let tier;
+          if (y < 5) tier = 0;
+          else if (y < 10) tier = 1;
+          else if (y < 15) tier = 2;
+          else tier = 3;
+
+          // arches: 80 around the ellipse
+          const archCount = 80;
+          const ang01 = (angle / TAU) * archCount;
+          const archPhase = ang01 - Math.floor(ang01); // 0..1
+          const inArchHorizontal = (archPhase > 0.18 && archPhase < 0.82);
+          let isOpening = false;
+          if (tier === 0 && y > 0.5 && y < 4.0) {
+            // round arches
+            const archCenterY = 2.25;
+            const dy = y - archCenterY;
+            const dx = (archPhase - 0.5) * 2; // -1..1
+            if ((dx*dx + (dy/1.6)*(dy/1.6)) < 0.7 && inArchHorizontal) isOpening = true;
+          } else if (tier === 1 && y > 5.5 && y < 9.0) {
+            const archCenterY = 7.0;
+            const dy = y - archCenterY;
+            const dx = (archPhase - 0.5) * 2;
+            if ((dx*dx + (dy/1.4)*(dy/1.4)) < 0.7 && inArchHorizontal) isOpening = true;
+          } else if (tier === 2 && y > 10.5 && y < 14.0) {
+            const archCenterY = 12.0;
+            const dy = y - archCenterY;
+            const dx = (archPhase - 0.5) * 2;
+            if ((dx*dx + (dy/1.3)*(dy/1.3)) < 0.7 && inArchHorizontal) isOpening = true;
+          }
+          if (isOpening) continue;
+
+          // shading: darker low, brighter high
+          const shade = 0.78 + 0.04 * tier + 0.05 * (rand() - 0.5);
+          const col = jitterColor(tier === 3 ? C.TRAVERTINE : C.TRAVERTINE_D, 0.06);
+          addVox(x, groundY + y, z, VS, col, shade);
+        }
+      }
+    }
+  }
+
+  // Cavea — tiered seating between Aw,Bw inner-wall and Ai,Bi inner ellipse
+  // Use unit voxels here (VS_C = 1.0) — chunky stairs read as tiers
+  const VS_C = 1.0;
+  for (let x = Math.floor(-Aw); x <= Aw; x += VS_C) {
+    for (let z = Math.floor(-Bw); z <= Bw; z += VS_C) {
+      const e_inWall = ellipseVal(x, z, Aw, Bw);
+      const e_in = ellipseVal(x, z, Ai, Bi);
+      if (e_inWall > 1 || e_in < 1) continue;
+      // ratio: 0 at inner arena edge → 1 near outer wall
+      const dInner = Math.sqrt(e_in);
+      const ratio = clamp((dInner - 1) / 0.8, 0, 1);
+      // staircase profile (visible tiers rising to outer wall)
+      const tierStep = Math.floor(ratio * 7);
+      const heightHere = clamp(2 + tierStep * 2, 2, 14);
+      for (let y = 0; y < heightHere; y += VS_C) {
+        const isStep = (y % 2) === 0;
+        const col = jitterColor(isStep ? C.TRAVERTINE_D : C.TRAVERTINE, 0.05);
+        addVox(x + 0.5, groundY + y + 0.5, z + 0.5, VS_C, col, 0.82 + (RNG() - 0.5) * 0.08);
+      }
+      // crowd voxels on top — sparse colored clusters
+      if (RNG() < 0.35) {
+        const topY = groundY + heightHere + 0.5;
+        addVox(x + 0.5, topY, z + 0.5, VS_C * 0.7,
+          jitterColor(choice([C.CROWD_A, C.CROWD_B, C.CROWD_C, C.CROWD_D]), 0.1), 0.95);
+        if (RNG() < 0.5)
+          addVox(x + 0.5, topY + 0.7, z + 0.5, VS_C * 0.6, jitterColor(C.SKIN, 0.08), 0.97);
+      }
+    }
+  }
+
+  // Arena floor — partially exposing hypogeum
+  for (let x = Math.floor(-Ai); x <= Ai; x += 1) {
+    for (let z = Math.floor(-Bi); z <= Bi; z += 1) {
+      const e_in = ellipseVal(x, z, Ai, Bi);
+      if (e_in > 1) continue;
+      const inPit = Math.abs(x) < Ai * 0.55 && Math.abs(z) < Bi * 0.55;
+      if (inPit) continue;
+      addVox(x + 0.5, groundY - 0.5, z + 0.5, 1.0, jitterColor(C.SAND, 0.08), 0.9);
+    }
+  }
+
+  // Hypogeum maze beneath
+  const HYP_GRID = 3;
+  for (let x = Math.floor(-Ai); x <= Ai; x += 1) {
+    for (let z = Math.floor(-Bi); z <= Bi; z += 1) {
+      const inPit = Math.abs(x) < Ai * 0.55 && Math.abs(z) < Bi * 0.55;
+      if (!inPit) continue;
+      const e_in = ellipseVal(x, z, Ai, Bi);
+      if (e_in > 1) continue;
+      // bottom slab
+      addVox(x + 0.5, hypoBottom + 0.5, z + 0.5, 1.0, jitterColor(C.DARK_STONE, 0.05), 0.7);
+      // grid-pattern walls with periodic openings
+      const onLine = ((Math.abs(x) % HYP_GRID) === 0) || ((Math.abs(z) % HYP_GRID) === 0);
+      const gx = Math.floor(x / HYP_GRID), gz = Math.floor(z / HYP_GRID);
+      if (onLine && (((gx + gz) % 3) !== 0)) {
+        for (let y = hypoBottom + 1; y < 0; y++) {
+          addVox(x + 0.5, y + 0.5, z + 0.5, 1.0, jitterColor(C.RED_BRICK_D, 0.06), 0.78);
+        }
+      }
+    }
+  }
+
+  // Gladiators in arena center (in the pit!)
+  for (let i = 0; i < 10; i++) {
+    const a = rand() * TAU;
+    const r = rand() * Math.min(Ai * 0.45, Bi * 0.45);
+    const gx = Math.round(Math.cos(a) * r), gz = Math.round(Math.sin(a) * r);
+    const team = rand() < 0.5 ? C.GLAD_RED : C.GLAD_BLUE;
+    addVox(gx + 0.5, hypoBottom + 1.5, gz + 0.5, 1.0, jitterColor(team, 0.06), 0.95);
+    addVox(gx + 0.5, hypoBottom + 2.5, gz + 0.5, 1.0, jitterColor(C.SKIN, 0.06), 0.97);
+    addVox(gx + 0.7, hypoBottom + 2.0, gz + 0.2, 0.4, jitterColor(C.GOLD_D, 0.04), 1.0);
+  }
+
+  // Velarium support poles — 16 poles around top of outer wall
+  const POLES = 32;
+  for (let i = 0; i < POLES; i++) {
+    const a = (i / POLES) * TAU;
+    const px = Math.cos(a) * (A + 0.5);
+    const pz = Math.sin(a) * (B + 0.5);
+    for (let y = wallTop; y < wallTop + 4; y += VS) {
+      addVox(px, y, pz, VS, jitterColor(C.DARK_STONE, 0.05), 0.85);
+    }
+  }
+  // velarium awning — radial striped fabric segments at top
+  for (let i = 0; i < POLES; i++) {
+    const a0 = (i / POLES) * TAU;
+    const a1 = ((i + 1) / POLES) * TAU;
+    const stripeColor = (i % 2) ? jitterColor([0.85, 0.20, 0.20], 0.05) : jitterColor([0.95, 0.85, 0.55], 0.05);
+    for (let r = 0.05; r < 0.95; r += 0.07) {
+      const aMid = (a0 + a1) / 2;
+      const px = Math.cos(aMid) * (A * (1 - r));
+      const pz = Math.sin(aMid) * (B * (1 - r));
+      const yy = wallTop + 4 - r * 3;
+      addVox(px, yy, pz, VS, stripeColor, 0.95);
+    }
+  }
+
+  // Mark grid as occupied so other buildings stay clear
+  pBlockMark(0, 0, A * 2 + 8, B * 2 + 8, 1);
+}
+
+// ======================================================================
+//  GENERIC BUILDING PARTS
+// ======================================================================
+
+// Solid block (filled box)
+function placeBlock(cx, cy, cz, w, h, d, color, shadeBase = 0.88) {
+  const x0 = cx - w/2, z0 = cz - d/2;
+  for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) for (let k = 0; k < d; k++) {
+    addVox(x0 + i + 0.5, cy + j + 0.5, z0 + k + 0.5, VOX,
+      jitterColor(color, 0.06), shadeBase + (RNG() - 0.5) * 0.06);
+  }
+}
+// Hollow box (4 walls)
+function placeWalls(cx, cy, cz, w, h, d, color, shadeBase = 0.86) {
+  const x0 = cx - w/2, z0 = cz - d/2;
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      addVox(x0 + i + 0.5, cy + j + 0.5, z0 + 0.5, VOX, jitterColor(color, 0.05), shadeBase);
+      addVox(x0 + i + 0.5, cy + j + 0.5, z0 + d - 0.5, VOX, jitterColor(color, 0.05), shadeBase);
+    }
+    for (let k = 1; k < d - 1; k++) {
+      addVox(x0 + 0.5, cy + j + 0.5, z0 + k + 0.5, VOX, jitterColor(color, 0.05), shadeBase);
+      addVox(x0 + w - 0.5, cy + j + 0.5, z0 + k + 0.5, VOX, jitterColor(color, 0.05), shadeBase);
+    }
+  }
+}
+// Pyramidal/hipped roof
+function placeHipRoof(cx, cy, cz, w, d, color, peakH = null) {
+  const x0 = cx - w/2, z0 = cz - d/2;
+  const layers = peakH || Math.min(Math.floor(Math.min(w, d) / 2), 5);
+  for (let l = 0; l < layers; l++) {
+    for (let i = l; i < w - l; i++) {
+      addVox(x0 + i + 0.5, cy + l + 0.5, z0 + l + 0.5, VOX, jitterColor(color, 0.06), 0.9);
+      addVox(x0 + i + 0.5, cy + l + 0.5, z0 + d - l - 0.5, VOX, jitterColor(color, 0.06), 0.9);
+    }
+    for (let k = l + 1; k < d - l - 1; k++) {
+      addVox(x0 + l + 0.5, cy + l + 0.5, z0 + k + 0.5, VOX, jitterColor(color, 0.06), 0.88);
+      addVox(x0 + w - l - 1 + 0.5, cy + l + 0.5, z0 + k + 0.5, VOX, jitterColor(color, 0.06), 0.88);
+    }
+  }
+}
+// Gable roof (pediment)
+function placeGableRoof(cx, cy, cz, w, d, color) {
+  const x0 = cx - w/2, z0 = cz - d/2;
+  const layers = Math.floor(d / 2);
+  for (let l = 0; l < layers; l++) {
+    for (let i = 0; i < w; i++) {
+      addVox(x0 + i + 0.5, cy + l + 0.5, z0 + l + 0.5, VOX, jitterColor(color, 0.05), 0.9);
+      addVox(x0 + i + 0.5, cy + l + 0.5, z0 + d - l - 0.5, VOX, jitterColor(color, 0.05), 0.9);
+    }
+  }
+}
+
+// Column with capital + base
+function placeColumn(cx, cy, cz, h, color = C.MARBLE) {
+  for (let y = 0; y < h; y++) {
+    addVox(cx, cy + y + 0.5, cz, VOX, jitterColor(color, 0.04), 0.92);
+  }
+  // base
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    if (Math.abs(dx) + Math.abs(dz) <= 1)
+      addVox(cx + dx, cy + 0.5, cz + dz, VOX, jitterColor(color, 0.04), 0.88);
+  }
+  // capital
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    if (Math.abs(dx) + Math.abs(dz) <= 1)
+      addVox(cx + dx, cy + h - 0.5, cz + dz, VOX, jitterColor(color, 0.04), 0.92);
+  }
+}
+
+// ======================================================================
+//  SPECIFIC BUILDINGS
+// ======================================================================
+
+function buildInsula(cx, cz, w, d) {
+  const baseY = heightAt(cx, cz);
+  const stories = randI(3, 5);
+  const storyH = 4;
+  const totalH = stories * storyH;
+  // ground floor: red brick
+  placeWalls(cx, baseY + 1, cz, w, storyH, d, C.RED_BRICK, 0.86);
+  // upper floors: travertine alternating with brick
+  for (let s = 1; s < stories; s++) {
+    const col = (s % 2) ? C.TRAVERTINE : C.RED_BRICK_D;
+    placeWalls(cx, baseY + 1 + s * storyH, cz, w, storyH, d, col, 0.86);
+  }
+  // windows — punch out random voxels
+  for (let s = 0; s < stories; s++) {
+    for (let i = 0; i < w; i++) {
+      if (i % 2 !== 0) continue;
+      // front and back faces darker (window holes)
+      if (rand() < 0.85) {
+        addVox(cx - w/2 + i + 0.5, baseY + 1 + s * storyH + 2 + 0.5, cz - d/2 + 0.5, VOX,
+          [0.08, 0.06, 0.04], 0.65);
+        addVox(cx - w/2 + i + 0.5, baseY + 1 + s * storyH + 2 + 0.5, cz + d/2 - 0.5, VOX,
+          [0.08, 0.06, 0.04], 0.65);
+      }
+    }
+  }
+  // terracotta roof (slight overhang)
+  placeHipRoof(cx, baseY + 1 + totalH, cz, w + 1, d + 1, C.TERRACOTTA, Math.min(3, Math.floor(Math.min(w,d)/3)));
+  pBlockMark(cx, cz, w, d, 1);
+}
+
+function buildTemple(cx, cz, w, d) {
+  const baseY = heightAt(cx, cz);
+  // podium (3 steps)
+  for (let s = 0; s < 3; s++) {
+    const sw = w + (3 - s) * 1, sd = d + (3 - s) * 1;
+    placeBlock(cx, baseY + 1 + s, cz, sw, 1, sd, C.MARBLE_D, 0.9);
+  }
+  const podY = baseY + 4;
+  // colonnade — front, back, sides
+  const colH = 9;
+  for (let i = 0; i < w; i++) {
+    if (i === 0 || i === w - 1 || i % 2 === 0) {
+      placeColumn(cx - w/2 + i + 0.5, podY, cz - d/2 + 0.5, colH, C.MARBLE);
+      placeColumn(cx - w/2 + i + 0.5, podY, cz + d/2 - 0.5, colH, C.MARBLE);
+    }
+  }
+  for (let k = 1; k < d - 1; k++) {
+    if (k === 0 || k === d - 1 || k % 2 === 0) {
+      placeColumn(cx - w/2 + 0.5, podY, cz - d/2 + k + 0.5, colH, C.MARBLE);
+      placeColumn(cx + w/2 - 0.5, podY, cz - d/2 + k + 0.5, colH, C.MARBLE);
+    }
+  }
+  // cella (inner room)
+  placeWalls(cx, podY, cz, Math.max(3, w - 4), colH, Math.max(3, d - 4), C.MARBLE_D, 0.88);
+  // architrave
+  placeBlock(cx, podY + colH, cz, w, 1, d, C.MARBLE, 0.92);
+  // gable / pediment
+  placeGableRoof(cx, podY + colH + 1, cz, w, d, C.GOLD);
+  // gold roof tip
+  for (let i = 0; i < w; i++)
+    addVox(cx - w/2 + i + 0.5, podY + colH + 1 + Math.floor(d/2) + 0.5, cz + 0.5, VOX, jitterColor(C.GOLD, 0.04), 1.0);
+  pBlockMark(cx, cz, w + 6, d + 6, 1);
+}
+
+function buildBasilica(cx, cz, w, d) {
+  const baseY = heightAt(cx, cz);
+  // long hall
+  placeWalls(cx, baseY + 1, cz, w, 12, d, C.TRAVERTINE, 0.88);
+  // interior columns down center (visible through some openings later)
+  for (let k = 2; k < d - 2; k += 3) {
+    placeColumn(cx - w/4, baseY + 1, cz - d/2 + k + 0.5, 11, C.MARBLE);
+    placeColumn(cx + w/4, baseY + 1, cz - d/2 + k + 0.5, 11, C.MARBLE);
+  }
+  // arched windows — punch holes
+  for (let k = 1; k < d - 1; k += 3) {
+    addVox(cx - w/2 + 0.5, baseY + 1 + 6 + 0.5, cz - d/2 + k + 0.5, VOX, [0.05,0.05,0.05], 0.6);
+    addVox(cx + w/2 - 0.5, baseY + 1 + 6 + 0.5, cz - d/2 + k + 0.5, VOX, [0.05,0.05,0.05], 0.6);
+  }
+  // roof
+  placeGableRoof(cx, baseY + 13, cz, w, d, C.TERRACOTTA);
+  // apse on far end (semicircle)
+  for (let dx = -3; dx <= 3; dx++) for (let dz = 0; dz <= 4; dz++) {
+    const r = Math.hypot(dx, dz);
+    if (r >= 2.5 && r <= 3.6)
+      for (let y = 0; y < 10; y++)
+        addVox(cx + dx + 0.5, baseY + 1 + y + 0.5, cz + d/2 + dz + 0.5, VOX, jitterColor(C.TRAVERTINE, 0.05), 0.88);
+  }
+  pBlockMark(cx, cz, w + 4, d + 8, 1);
+}
+
+function buildArchOfConstantine(cx, cz) {
+  const baseY = heightAt(cx, cz);
+  const w = 15, d = 5, h = 16;
+  // base block
+  placeBlock(cx, baseY + 1, cz, w, h, d, C.TRAVERTINE, 0.9);
+  // central arch
+  for (let dx = -2; dx <= 2; dx++) for (let dy = 1; dy <= 6; dy++) {
+    const r = Math.hypot(dx, dy - 3.5);
+    if (r < 2.8)
+      for (let dz = 0; dz < d; dz++)
+        addVox(cx + dx + 0.5, baseY + 1 + dy + 0.5, cz - d/2 + dz + 0.5, VOX, [0.06, 0.05, 0.04], 0.6);
+  }
+  // side arches
+  for (const off of [-5, 5]) {
+    for (let dx = -1; dx <= 1; dx++) for (let dy = 1; dy <= 4; dy++) {
+      const r = Math.hypot(dx, dy - 2.5);
+      if (r < 1.8)
+        for (let dz = 0; dz < d; dz++)
+          addVox(cx + off + dx + 0.5, baseY + 1 + dy + 0.5, cz - d/2 + dz + 0.5, VOX, [0.06, 0.05, 0.04], 0.6);
+    }
+  }
+  // attic (top decoration)
+  placeBlock(cx, baseY + 1 + h, cz, w, 2, d, C.MARBLE, 0.92);
+  // gold sculpted figures
+  for (let i = -5; i <= 5; i += 5) {
+    addVox(cx + i + 0.5, baseY + 1 + h + 2 + 0.5, cz + 0.5, VOX, jitterColor(C.GOLD, 0.04), 1.0);
+    addVox(cx + i + 0.5, baseY + 1 + h + 3 + 0.5, cz + 0.5, VOX, jitterColor(C.GOLD, 0.04), 1.0);
+  }
+  pBlockMark(cx, cz, w + 4, d + 4, 1);
+}
+
+function buildAqueduct(ax, az, bx, bz, h) {
+  // Place a series of arched piers from A to B
+  const dx = bx - ax, dz = bz - az;
+  const len = Math.hypot(dx, dz);
+  const pierSpacing = 8;
+  const nPiers = Math.floor(len / pierSpacing);
+  const ux = dx / len, uz = dz / len;
+  // perpendicular for thickness
+  const px = -uz, pz = ux;
+  for (let i = 0; i <= nPiers; i++) {
+    const t = i / nPiers;
+    const cx = ax + dx * t;
+    const cz = az + dz * t;
+    const groundH = heightAt(Math.round(cx), Math.round(cz));
+    // pier
+    for (let dy = 0; dy < h; dy++) {
+      for (let pj = -1; pj <= 1; pj++) {
+        for (let pk = -1; pk <= 1; pk++) {
+          addVox(cx + pj + 0.5, groundH + 1 + dy + 0.5, cz + pk + 0.5, VOX,
+            jitterColor(C.TRAVERTINE_D, 0.05), 0.85);
+        }
+      }
+    }
+    // arch to next pier
+    if (i < nPiers) {
+      for (let s = 1; s < pierSpacing - 1; s++) {
+        const tt = (i * pierSpacing + s) / (nPiers * pierSpacing);
+        const sx = ax + dx * tt;
+        const sz = az + dz * tt;
+        const localGround = heightAt(Math.round(sx), Math.round(sz));
+        const archCenter = h - 3;
+        const archX = (s - pierSpacing/2);
+        for (let dy = 0; dy < 4; dy++) {
+          const r = Math.hypot(archX, dy - 2);
+          if (r >= 2.5 && r <= 3.5) {
+            addVox(sx + 0.5, localGround + 1 + archCenter + dy - 2 + 0.5, sz + 0.5, VOX,
+              jitterColor(C.TRAVERTINE_D, 0.05), 0.85);
+          }
+        }
+      }
+    }
+    // top water channel (every cell)
+    for (let s = 0; s < pierSpacing && i < nPiers; s++) {
+      const tt = (i * pierSpacing + s) / (nPiers * pierSpacing);
+      const sx = ax + dx * tt, sz = az + dz * tt;
+      const localGround = heightAt(Math.round(sx), Math.round(sz));
+      // top deck
+      for (let pj = -1; pj <= 1; pj++)
+        addVox(sx + pj * px + 0.5, localGround + 1 + h + 0.5, sz + pj * pz + 0.5, VOX, jitterColor(C.TRAVERTINE, 0.04), 0.92);
+      // water in channel
+      addVox(sx + 0.5, localGround + 1 + h + 1 + 0.5, sz + 0.5, VOX, jitterColor(C.WATER, 0.05), 0.95);
+    }
+  }
+}
+
+function buildCircusMaximus(cx, cz) {
+  // Large oval racing track to the south of Aventine
+  const A = 70, B = 22;
+  const baseY = heightAt(cx, cz);
+  // sand track ring
+  for (let x = -A - 1; x <= A + 1; x++) {
+    for (let z = -B - 1; z <= B + 1; z++) {
+      const e_out = (x*x)/(A*A) + (z*z)/(B*B);
+      const e_in = (x*x)/((A-6)*(A-6)) + (z*z)/((B-6)*(B-6));
+      if (e_out > 1) continue;
+      if (e_in <= 1) continue; // skip middle (spina area)
+      addVox(cx + x + 0.5, baseY + 0.5, cz + z + 0.5, VOX, jitterColor(C.SAND, 0.06), 0.9);
+    }
+  }
+  // Spina (central barrier with obelisk)
+  for (let x = -A * 0.6; x <= A * 0.6; x++) {
+    for (let z = -1; z <= 1; z++) {
+      addVox(cx + x + 0.5, baseY + 1 + 0.5, cz + z + 0.5, VOX, jitterColor(C.MARBLE_D, 0.05), 0.9);
+    }
+  }
+  // Obelisk
+  for (let y = 0; y < 12; y++) {
+    addVox(cx + 0.5, baseY + 1 + y + 0.5, cz + 0.5, VOX, jitterColor(C.PORPHYRY, 0.05), 0.92);
+  }
+  addVox(cx + 0.5, baseY + 1 + 12 + 0.5, cz + 0.5, VOX, jitterColor(C.GOLD, 0.04), 1.0);
+  // Tiered seating around outside
+  for (let x = -A - 2; x <= A + 2; x++) {
+    for (let z = -B - 4; z <= B + 4; z++) {
+      const e_out = (x*x)/((A+2)*(A+2)) + (z*z)/((B+3)*(B+3));
+      const e_inner = (x*x)/(A*A) + (z*z)/(B*B);
+      if (e_out > 1 || e_inner < 1) continue;
+      const h = 4;
+      for (let y = 0; y < h; y++) {
+        addVox(cx + x + 0.5, baseY + 1 + y + 0.5, cz + z + 0.5, VOX,
+          jitterColor(C.TRAVERTINE_D, 0.06), 0.86);
+      }
+      // crowd
+      if (rand() < 0.18) {
+        addVox(cx + x + 0.5, baseY + 1 + h + 0.5, cz + z + 0.5, VOX,
+          jitterColor(choice([C.CROWD_A, C.CROWD_B, C.CROWD_C, C.CROWD_D]), 0.1), 0.95);
+      }
+    }
+  }
+  pBlockMark(cx, cz, A * 2 + 6, B * 2 + 8, 1);
+}
+
+// Try to place a building, with collision avoidance & retry
+function tryPlaceInsula() {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const w = randI(7, 12);
+    const d = randI(7, 12);
+    // pick a location within outer band, away from Colosseum (Zone C)
+    const a = rand() * TAU;
+    const r = randR(70, 175);
+    const cx = Math.round(Math.cos(a) * r);
+    const cz = Math.round(Math.sin(a) * r);
+    if (Math.abs(cx) > WS - 12 || Math.abs(cz) > WS - 12) continue;
+    if (isInTiber(cx, cz) || tiberDist(cx, cz) < TIBER_HALF_WIDTH + 4) continue;
+    // skip if on big slope
+    const h0 = heightAt(cx, cz);
+    let ok = true;
+    for (let dx = -w/2; dx <= w/2 && ok; dx++)
+      for (let dz = -d/2; dz <= d/2 && ok; dz++) {
+        if (Math.abs(heightAt(cx + dx, cz + dz) - h0) > 2) ok = false;
+        if (isRoad(cx + dx, cz + dz)) ok = false;
+      }
+    if (!ok) continue;
+    if (!pBlockClear(cx, cz, w, d, 2)) continue;
+    buildInsula(cx, cz, w, d);
+    return true;
+  }
+  return false;
+}
+
+function buildCity() {
+  // Zone A — Colosseum (center)
+  buildColosseum();
+
+  // Zone B — Forum just north
+  // Arch of Constantine right next to Colosseum (south-west of Forum)
+  buildArchOfConstantine(-25, -60);
+
+  // Temple of Venus and Roma — east of Colosseum
+  buildTemple(70, -2, 14, 28);
+
+  // Basilica of Maxentius — north of Colosseum
+  buildBasilica(-25, -82, 18, 36);
+
+  // Two more temples in Forum (north of Colosseum mark)
+  buildTemple(-65, -90, 9, 16);
+  buildTemple(35, -80, 8, 14);
+
+  // Senate / Curia (north-west)
+  buildBasilica(-70, -55, 11, 16);
+
+  // Circus Maximus to the south-west
+  buildCircusMaximus(-30, 130);
+
+  // Aqueducts spanning horizon
+  buildAqueduct(-180, -160, -20, -150, 9);
+  buildAqueduct(120, -160, 180, -100, 9);
+  buildAqueduct(150, 50, 180, 180, 9);
+
+  // Insulae (residential) — Zone C, dense
+  let placed = 0;
+  for (let i = 0; i < 220; i++) {
+    if (tryPlaceInsula()) placed++;
+  }
+  console.log('Insulae placed:', placed);
+}
+
+// ======================================================================
+//  RUN GENERATION
+// ======================================================================
+const t0 = performance.now();
+buildTerrain();
+const tTer = performance.now();
+buildCity();
+const tCity = performance.now();
+buildVegetation();
+const tVeg = performance.now();
+console.log(`Generation: terrain ${(tTer-t0)|0}ms, city ${(tCity-tTer)|0}ms, veg ${(tVeg-tCity)|0}ms — voxels: ${voxCount}`);
+
+// ======================================================================
+//  UPLOAD INSTANCE BUFFER
+// ======================================================================
+const finalInstances = voxData.subarray(0, voxCount * VOX_STRIDE);
+
+const voxVao = gl.createVertexArray();
+gl.bindVertexArray(voxVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, cubeVbo);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+gl.enableVertexAttribArray(1);
+gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+
+const instanceVbo = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, instanceVbo);
+gl.bufferData(gl.ARRAY_BUFFER, finalInstances, gl.STATIC_DRAW);
+// offset+scale (vec4)
+gl.enableVertexAttribArray(2);
+gl.vertexAttribPointer(2, 4, gl.FLOAT, false, VOX_STRIDE * 4, 0);
+gl.vertexAttribDivisor(2, 1);
+// color+shade (vec4)
+gl.enableVertexAttribArray(3);
+gl.vertexAttribPointer(3, 4, gl.FLOAT, false, VOX_STRIDE * 4, 16);
+gl.vertexAttribDivisor(3, 1);
+gl.bindVertexArray(null);
+
+// release CPU copy
+voxData = null;
+
+// ======================================================================
+//  CAMERA + INPUT
+// ======================================================================
+const camera = {
+  target: [0, 4, 0],
+  distance: 130,
+  azimuth: -Math.PI / 4,
+  polar: 1.0, // 0 = top down, PI/2 = horizon
+  fov: Math.PI / 3.4,
+};
+// Optional camera presets via URL hash for testing (e.g. #wide, #top, #sunset)
+(() => {
+  const h = (location.hash || '').replace('#', '');
+  if (h.includes('wide'))   { camera.distance = 230; camera.polar = 0.7; camera.azimuth = -Math.PI/4; }
+  if (h.includes('top'))    { camera.distance = 280; camera.polar = 0.25; }
+  if (h.includes('side'))   { camera.distance = 110; camera.polar = 1.25; camera.azimuth = -Math.PI/2; }
+  if (h.includes('tiber'))  { camera.distance = 150; camera.polar = 0.8; camera.azimuth = Math.PI*0.65; camera.target = [-100, 0, 0]; }
+})();
+
+function camPos() {
+  const sp = Math.sin(camera.polar), cp = Math.cos(camera.polar);
+  const sa = Math.sin(camera.azimuth), ca = Math.cos(camera.azimuth);
+  return [
+    camera.target[0] + camera.distance * sp * ca,
+    camera.target[1] + camera.distance * cp,
+    camera.target[2] + camera.distance * sp * sa,
+  ];
+}
+
+let pointer = { active: false, button: 0, x: 0, y: 0 };
+canvas.addEventListener('mousedown', e => {
+  pointer.active = true;
+  pointer.button = e.button;
+  pointer.x = e.clientX; pointer.y = e.clientY;
+  e.preventDefault();
+});
+window.addEventListener('mouseup', () => pointer.active = false);
+window.addEventListener('mousemove', e => {
+  if (!pointer.active) return;
+  const dx = e.clientX - pointer.x, dy = e.clientY - pointer.y;
+  pointer.x = e.clientX; pointer.y = e.clientY;
+  if (pointer.button === 0) {
+    camera.azimuth += dx * 0.005;
+    camera.polar  = clamp(camera.polar - dy * 0.005, 0.15, 1.45);
+  } else if (pointer.button === 2) {
+    // pan in screen plane
+    const sa = Math.sin(camera.azimuth), ca = Math.cos(camera.azimuth);
+    const right = [-sa, 0, ca];
+    const fwd = [ca, 0, sa];
+    const speed = camera.distance * 0.0015;
+    camera.target[0] -= (right[0] * dx - fwd[0] * dy) * speed;
+    camera.target[2] -= (right[2] * dx - fwd[2] * dy) * speed;
+  }
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('wheel', e => {
+  camera.distance = clamp(camera.distance * Math.exp(e.deltaY * 0.0012), 25, 380);
+  e.preventDefault();
+}, { passive: false });
+
+// touch — single-finger orbit, two-finger pinch zoom + pan
+let touch = { ids: [], pts: [], dist: 0 };
+canvas.addEventListener('touchstart', e => {
+  touch.ids = []; touch.pts = [];
+  for (const t of e.touches) { touch.ids.push(t.identifier); touch.pts.push({x: t.clientX, y: t.clientY}); }
+  if (touch.pts.length === 2) {
+    touch.dist = Math.hypot(touch.pts[0].x - touch.pts[1].x, touch.pts[0].y - touch.pts[1].y);
+  }
+  e.preventDefault();
+}, { passive: false });
+canvas.addEventListener('touchmove', e => {
+  const cur = [];
+  for (const t of e.touches) cur.push({id: t.identifier, x: t.clientX, y: t.clientY});
+  if (cur.length === 1 && touch.pts.length >= 1) {
+    const dx = cur[0].x - touch.pts[0].x, dy = cur[0].y - touch.pts[0].y;
+    camera.azimuth += dx * 0.005;
+    camera.polar = clamp(camera.polar - dy * 0.005, 0.15, 1.45);
+  } else if (cur.length === 2 && touch.pts.length === 2) {
+    const d = Math.hypot(cur[0].x - cur[1].x, cur[0].y - cur[1].y);
+    camera.distance = clamp(camera.distance * (touch.dist / d), 25, 380);
+    touch.dist = d;
+  }
+  touch.pts = cur;
+  e.preventDefault();
+}, { passive: false });
+
+// keyboard
+let flyover = false;
+let timeOfDay = 0; // 0 = day, 1 = sunset
+window.addEventListener('keydown', e => {
+  if (e.key === 'r' || e.key === 'R') {
+    camera.target = [0, 4, 0];
+    camera.distance = 130;
+    camera.azimuth = -Math.PI / 4;
+    camera.polar = 1.0;
+  } else if (e.key === 'f' || e.key === 'F') {
+    flyover = !flyover;
+  } else if (e.key === 't' || e.key === 'T') {
+    timeOfDay = 1 - timeOfDay;
+  }
+});
+
+// ======================================================================
+//  LIGHTING PRESETS
+// ======================================================================
+const LIGHT = {
+  day: {
+    dir:    v3norm([0.4, 0.95, 0.3]),
+    color:  [1.05, 1.00, 0.92],
+    ambient:[0.42, 0.46, 0.55],
+    fog:    [0.78, 0.84, 0.92],
+    skyTop: [0.40, 0.62, 0.92],
+    skyMid: [0.78, 0.86, 0.95],
+    skyBot: [0.62, 0.78, 0.92],
+  },
+  sunset: {
+    dir:    v3norm([0.6, 0.35, -0.3]),
+    color:  [1.30, 0.70, 0.40],
+    ambient:[0.40, 0.26, 0.30],
+    fog:    [0.80, 0.45, 0.32],
+    skyTop: [0.30, 0.20, 0.45],
+    skyMid: [0.92, 0.46, 0.32],
+    skyBot: [0.95, 0.65, 0.40],
+  },
+};
+
+let lightT = 0; // animated 0..1 (0 day, 1 sunset)
+
+// ======================================================================
+//  RENDER LOOP
+// ======================================================================
+const statsEl = document.getElementById('stats');
+let frame = 0, fpsLast = performance.now(), fpsAcc = 0;
+
+function render() {
+  const t = performance.now();
+  // animate timeOfDay
+  lightT += (timeOfDay - lightT) * 0.04;
+  const L = {
+    dir: v3norm(lerpV(LIGHT.day.dir, LIGHT.sunset.dir, lightT)),
+    color: lerpV(LIGHT.day.color, LIGHT.sunset.color, lightT),
+    ambient: lerpV(LIGHT.day.ambient, LIGHT.sunset.ambient, lightT),
+    fog: lerpV(LIGHT.day.fog, LIGHT.sunset.fog, lightT),
+    skyTop: lerpV(LIGHT.day.skyTop, LIGHT.sunset.skyTop, lightT),
+    skyMid: lerpV(LIGHT.day.skyMid, LIGHT.sunset.skyMid, lightT),
+    skyBot: lerpV(LIGHT.day.skyBot, LIGHT.sunset.skyBot, lightT),
+  };
+
+  // flyover rotates camera azimuth
+  if (flyover) {
+    camera.azimuth += 0.0025;
+    camera.polar = lerp(camera.polar, 0.85, 0.02);
+    camera.distance = lerp(camera.distance, 150, 0.02);
+    camera.target[0] = lerp(camera.target[0], 0, 0.02);
+    camera.target[2] = lerp(camera.target[2], 0, 0.02);
+  }
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.disable(gl.DEPTH_TEST);
+  gl.depthMask(false);
+
+  // sky pass
+  gl.useProgram(skyProg);
+  gl.bindVertexArray(skyVao);
+  gl.uniform3fv(uSky.top, L.skyTop);
+  gl.uniform3fv(uSky.bot, L.skyBot);
+  gl.uniform3fv(uSky.horizon, L.skyMid);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  // voxel pass
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthMask(true);
+  gl.depthFunc(gl.LEQUAL);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.BACK);
+  gl.clear(gl.DEPTH_BUFFER_BIT);
+
+  const eye = camPos();
+  const proj = mat4Perspective(camera.fov, canvas.width / canvas.height, 0.5, 900);
+  const view = mat4LookAt(eye, camera.target, [0, 1, 0]);
+
+  gl.useProgram(voxProg);
+  gl.uniformMatrix4fv(uVox.proj, false, proj);
+  gl.uniformMatrix4fv(uVox.view, false, view);
+  gl.uniform3fv(uVox.lightDir, L.dir);
+  gl.uniform3fv(uVox.lightColor, L.color);
+  gl.uniform3fv(uVox.ambient, L.ambient);
+  gl.uniform3fv(uVox.fogColor, L.fog);
+  gl.uniform1f(uVox.fogNear, 130);
+  gl.uniform1f(uVox.fogFar, 520);
+  gl.uniform3fv(uVox.camPos, eye);
+
+  gl.bindVertexArray(voxVao);
+  gl.drawArraysInstanced(gl.TRIANGLES, 0, CUBE_VERT_COUNT, voxCount);
+  gl.bindVertexArray(null);
+
+  // stats
+  fpsAcc++;
+  if (t - fpsLast > 500) {
+    const fps = (fpsAcc * 1000) / (t - fpsLast);
+    statsEl.textContent =
+      `voxels: ${voxCount.toLocaleString()}  ·  ${fps.toFixed(0)} fps  ·  ${timeOfDay ? 'sunset' : 'day'}${flyover ? ' · flyover' : ''}`;
+    fpsLast = t; fpsAcc = 0;
+  }
+  frame++;
+  requestAnimationFrame(render);
+}
+
+// hide loading
+document.getElementById('loading').classList.add('hidden');
+setTimeout(() => document.getElementById('loading').remove(), 800);
+
+requestAnimationFrame(render);
+
+})();
+</script>
+</body>
+</html>

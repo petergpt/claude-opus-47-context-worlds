@@ -1,0 +1,43 @@
+html,body{margin:0;height:100%;background:#0b0d10;color:#eee;font-family:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;overflow:hidden}
+#view{display:block;width:100vw;height:100vh}
+#hud{
+  position:fixed;top:14px;left:14px;z-index:10;
+  width:264px;padding:14px 14px 12px;
+  background:rgba(14,16,20,.62);
+  backdrop-filter:blur(14px) saturate(120%);
+  -webkit-backdrop-filter:blur(14px) saturate(120%);
+  border:1px solid rgba(255,255,255,.07);
+  border-radius:12px;
+  box-shadow:0 10px 40px rgba(0,0,0,.35);
+  font-size:12px;letter-spacing:.02em;
+}
+#hud .title{
+  font-size:11px;letter-spacing:.22em;color:#cdd3da;
+  margin:0 0 10px;font-weight:600;
+}
+#hud .row{margin:8px 0}
+#hud .row.inline{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+#hud label{display:flex;justify-content:space-between;font-size:10.5px;color:#9aa3ac;text-transform:uppercase;letter-spacing:.12em;margin-bottom:4px}
+#hud label span{color:#e4c089;font-variant-numeric:tabular-nums}
+#hud input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:14px;background:transparent;cursor:pointer;
+}
+#hud input[type=range]::-webkit-slider-runnable-track{height:2px;background:rgba(255,255,255,.14);border-radius:2px}
+#hud input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:12px;height:12px;border-radius:50%;
+  background:#e4c089;margin-top:-5px;box-shadow:0 0 0 2px rgba(228,192,137,.18)
+}
+#hud input[type=checkbox]{accent-color:#e4c089;margin-right:6px}
+#hud button{
+  flex:1;background:rgba(228,192,137,.08);border:1px solid rgba(228,192,137,.25);
+  color:#e4c089;padding:6px 8px;border-radius:6px;font-size:10.5px;
+  letter-spacing:.1em;text-transform:uppercase;cursor:pointer;font-weight:500;
+}
+#hud button:hover{background:rgba(228,192,137,.16)}
+#hud .meta{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06);font-size:10px;color:#7a838c;display:flex;justify-content:space-between}
+#hud .meta #fps{color:#cdd3da;font-variant-numeric:tabular-nums}
+#compass-overlay{
+  position:fixed;right:18px;bottom:18px;width:140px;height:140px;z-index:10;
+  pointer-events:none;display:none;
+}
+#compass-overlay.on{display:block}

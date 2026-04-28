@@ -1,0 +1,260 @@
+:root {
+  color-scheme: dark;
+  --background: #070809;
+  --surface: rgba(14, 17, 20, 0.88);
+  --surface-strong: rgba(20, 24, 28, 0.96);
+  --line: rgba(255, 255, 255, 0.12);
+  --text: #f3f6f8;
+  --muted: #9aa4ae;
+  --accent: #f0c15a;
+  --control: rgba(255, 255, 255, 0.07);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+button,
+a {
+  font: inherit;
+}
+
+.shell {
+  min-height: 100svh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 28rem),
+    var(--background);
+}
+
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(18rem, 1fr) auto auto;
+  align-items: center;
+  gap: 1rem;
+  min-height: 5.5rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-strong);
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: clamp(1.05rem, 1.6vw, 1.45rem);
+  font-weight: 680;
+  line-height: 1.1;
+}
+
+.brand p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.prompt-tabs,
+.context-switch,
+.viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.prompt-tab,
+.context-button,
+.scene-jump,
+.viewer-actions a {
+  border: 1px solid var(--line);
+  color: var(--text);
+  background: var(--control);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.prompt-tab,
+.context-button,
+.viewer-actions a {
+  min-height: 2.5rem;
+  border-radius: 999px;
+  padding: 0 0.95rem;
+}
+
+.prompt-tab:hover,
+.context-button:hover,
+.scene-jump:hover,
+.viewer-actions a:hover {
+  border-color: rgba(240, 193, 90, 0.72);
+  background: rgba(240, 193, 90, 0.12);
+}
+
+.prompt-tab.is-active,
+.context-button.is-active,
+.scene-jump.is-active {
+  color: #111111;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.viewer {
+  position: relative;
+  min-height: 0;
+  background: #000;
+  overflow: hidden;
+}
+
+.viewer iframe {
+  width: 100%;
+  height: 100%;
+  min-height: calc(100svh - 11.7rem);
+  display: block;
+  border: 0;
+  background: #000;
+}
+
+.viewer-actions {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  padding: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.56);
+  backdrop-filter: blur(16px);
+}
+
+.viewer-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.scene-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.scene-jump {
+  min-height: 6.2rem;
+  border-width: 0 1px 0 0;
+  border-radius: 0;
+  padding: 1rem;
+  text-align: left;
+}
+
+.scene-jump:last-child {
+  border-right: 0;
+}
+
+.scene-jump span,
+.scene-jump strong {
+  display: block;
+}
+
+.scene-jump span {
+  color: currentColor;
+  font-size: 0.85rem;
+  opacity: 0.72;
+}
+
+.scene-jump strong {
+  margin-top: 0.4rem;
+  font-size: clamp(0.95rem, 1.4vw, 1.12rem);
+  font-weight: 660;
+  line-height: 1.1;
+}
+
+.is-switching iframe {
+  opacity: 0.18;
+  transform: scale(0.994);
+}
+
+.viewer iframe {
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+@media (max-width: 1020px) {
+  .topbar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .prompt-tabs,
+  .context-switch {
+    overflow-x: auto;
+    padding-bottom: 0.1rem;
+  }
+
+  .prompt-tab,
+  .context-button {
+    flex: 0 0 auto;
+  }
+
+  .scene-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .topbar {
+    min-height: auto;
+    padding: 0.8rem;
+    gap: 0.75rem;
+  }
+
+  .brand h1 {
+    font-size: 1rem;
+  }
+
+  .brand p {
+    font-size: 0.78rem;
+  }
+
+  .prompt-tab,
+  .context-button,
+  .viewer-actions a {
+    min-height: 2.25rem;
+    padding: 0 0.75rem;
+    font-size: 0.82rem;
+  }
+
+  .viewer iframe {
+    min-height: 62svh;
+  }
+
+  .viewer-actions {
+    left: 0.75rem;
+    right: 0.75rem;
+    justify-content: center;
+  }
+
+  .scene-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .scene-jump {
+    min-height: 4.8rem;
+    padding: 0.8rem;
+  }
+}

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Opus 4.7 Context Worlds</title>
+  <meta name="description" content="Interactive scene comparisons generated with Claude Opus 4.7 at 400k and 1m context windows." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar" aria-label="Showcase controls">
+      <div class="brand">
+        <h1>Claude Opus 4.7 Context Worlds</h1>
+        <p id="sceneSummary">Voxel Rome · 400k Context</p>
+      </div>
+
+      <nav class="prompt-tabs" aria-label="Choose scene">
+        <button type="button" class="prompt-tab is-active" data-scene="rome">Voxel Rome</button>
+        <button type="button" class="prompt-tab" data-scene="golden-gate">Golden Gate</button>
+        <button type="button" class="prompt-tab" data-scene="stonehenge">Stonehenge</button>
+      </nav>
+
+      <div class="context-switch" aria-label="Choose context window">
+        <button type="button" class="context-button is-active" data-context="400k">400k</button>
+        <button type="button" class="context-button" data-context="1m">1m</button>
+      </div>
+    </header>
+
+    <section class="viewer" aria-label="Interactive scene viewer">
+      <iframe
+        id="sceneFrame"
+        title="Voxel Rome · 400k Context"
+        src="scenes/voxel-rome-400k/index.html"
+        allow="fullscreen; xr-spatial-tracking"
+      ></iframe>
+
+      <div class="viewer-actions" aria-label="Scene actions">
+        <a id="openScene" href="scenes/voxel-rome-400k/index.html" target="_blank" rel="noreferrer">Open Scene</a>
+        <a id="viewSource" href="scenes/voxel-rome-400k/index.html" target="_blank" rel="noreferrer">Source</a>
+      </div>
+    </section>
+
+    <footer class="scene-strip" aria-label="All scene shortcuts">
+      <button type="button" class="scene-jump is-active" data-scene="rome" data-context="400k">
+        <span>Voxel Rome</span>
+        <strong>400k Context</strong>
+      </button>
+      <button type="button" class="scene-jump" data-scene="rome" data-context="1m">
+        <span>Voxel Rome</span>
+        <strong>1m Context</strong>
+      </button>
+      <button type="button" class="scene-jump" data-scene="golden-gate" data-context="400k">
+        <span>Golden Gate</span>
+        <strong>400k Context</strong>
+      </button>
+      <button type="button" class="scene-jump" data-scene="golden-gate" data-context="1m">
+        <span>Golden Gate</span>
+        <strong>1m Context</strong>
+      </button>
+      <button type="button" class="scene-jump" data-scene="stonehenge" data-context="400k">
+        <span>Stonehenge</span>
+        <strong>400k Context</strong>
+      </button>
+      <button type="button" class="scene-jump" data-scene="stonehenge" data-context="1m">
+        <span>Stonehenge</span>
+        <strong>1m Context</strong>
+      </button>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
